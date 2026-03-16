@@ -127,7 +127,7 @@ function PlacementScreen({ session, onGameStart }: { session: GameSession; onGam
     displayIndices.length === (selectedDef?.size ?? 0) &&
     isValidPlacement(displayIndices, cells)
 
-  function handleCellClick(index: number) {
+  function handleCellClick(_index: number) {
     if (myBoardSaved || !selectedDef || displayIndices.length === 0 || !previewValid) return
     const newCells = [...cells]
     for (const idx of displayIndices) newCells[idx] = 'ship'
