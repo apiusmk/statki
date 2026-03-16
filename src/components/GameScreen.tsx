@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
+import { playHit, playMiss, playSunk } from '../lib/sounds'
 import { GameSession } from './Lobby'
 import Board from './Board'
 import { CellState } from '../types'
@@ -141,9 +142,16 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
         (payload) => {
           const shot = payload.new as Shot
           setShots(prev => [...prev, shot])
-          // Toast dla strzałów PRZECIWNIKA (zatopienie mojego statku)
-          if (shot.shooter_id !== session.playerId && shot.result === 'sunk') {
-            addToast('💥 Twój statek zatopiony!', 'sunk-me')
+          // Dźwięk i toast dla strzałów PRZECIWNIKA
+          if (shot.shooter_id !== session.playerId) {
+            if (shot.result === 'sunk') {
+              playSunk()
+              addToast('💥 Twój statek zatopiony!', 'sunk-me')
+            } else if (shot.result === 'hit') {
+              playHit()
+            } else {
+              playMiss()
+            }
           }
         }
       )
@@ -218,7 +226,11 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
       result,
     })
 
-    // Toast zatopienia dla strzelającego
+    // Dźwięk i toast dla strzelającego
+    if (isSunk) playSunk()
+    else if (isHit) playHit()
+    else playMiss()
+
     if (isSunk && !gameOver) addToast('💣 Zatopiony!', 'sunk-opp')
 
     if (gameOver) {
