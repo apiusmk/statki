@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell.exe -File - << 'EOF'\n$env:PATH = \"C:\\\\Program Files\\\\nodejs;\" + $env:PATH\nSet-Location \"C:\\\\Users\\\\MarekKami\\\\u0144sk_fvrs92d\\\\KLAUDIUSZ\\\\STATKI\"\n& \"C:\\\\Program Files\\\\nodejs\\\\node.exe\" --version\nEOF)"
+    ]
+  }
+}
