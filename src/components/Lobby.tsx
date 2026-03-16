@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
+import Leaderboard from './Leaderboard'
 
 function generateCode(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase()
@@ -227,6 +228,8 @@ export default function Lobby({ onEnterGame }: LobbyProps) {
           </button>
         </div>
       </div>
+
+      <Leaderboard />
     </div>
   )
 }
