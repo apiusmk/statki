@@ -9,21 +9,22 @@ interface BoardProps {
   previewValid: boolean
   onCellClick: (index: number) => void
   onCellHover: (index: number | null) => void
+  // disabled: blokuje interakcję (np. plansza przeciwnika gdy nie twoja tura)
+  disabled?: boolean
 }
 
-function getCellClass(state: CellState, isPreview: boolean, previewValid: boolean): string {
+function getCellClass(state: CellState, isPreview: boolean, previewValid: boolean, disabled: boolean): string {
   if (isPreview) {
-    return previewValid
-      ? 'bg-emerald-400 border-emerald-600'
-      : 'bg-red-400 border-red-600'
+    return previewValid ? 'bg-emerald-400 border-emerald-600' : 'bg-red-400 border-red-600'
   }
   if (state === 'ship') return 'bg-teal-700 hover:bg-teal-600 border-teal-900'
-  if (state === 'hit')  return 'bg-red-500 hover:bg-red-400 border-red-700'
+  if (state === 'hit')  return 'bg-red-500 border-red-700'
   if (state === 'miss') return 'bg-cyan-100 border-cyan-300'
-  return 'bg-cyan-700 hover:bg-cyan-500 border-cyan-900'
+  // puste pole — hover tylko gdy aktywne
+  return disabled ? 'bg-cyan-700 border-cyan-900' : 'bg-cyan-700 hover:bg-cyan-500 border-cyan-900'
 }
 
-export default function Board({ cells, previewIndices, previewValid, onCellClick, onCellHover }: BoardProps) {
+export default function Board({ cells, previewIndices, previewValid, onCellClick, onCellHover, disabled = false }: BoardProps) {
   const previewSet = new Set(previewIndices ?? [])
 
   return (
@@ -54,14 +55,15 @@ export default function Board({ cells, previewIndices, previewValid, onCellClick
               <div
                 key={index}
                 className={[
-                  'w-9 h-9 border flex items-center justify-center cursor-pointer select-none',
-                  'transition-all duration-100 active:scale-90',
-                  getCellClass(state, isPreview, previewValid),
+                  'w-9 h-9 border flex items-center justify-center select-none',
+                  'transition-all duration-100',
+                  disabled ? 'cursor-default' : 'cursor-pointer active:scale-90',
+                  getCellClass(state, isPreview, previewValid, disabled),
                 ].join(' ')}
-                onClick={() => onCellClick(index)}
-                onMouseEnter={() => onCellHover(index)}
+                onClick={() => !disabled && onCellClick(index)}
+                onMouseEnter={() => !disabled && onCellHover(index)}
               >
-                {state === 'miss' && <span className="text-cyan-400 font-bold text-lg leading-none">×</span>}
+                {state === 'miss' && <span className="text-cyan-400 text-xl leading-none">·</span>}
                 {state === 'hit'  && <span className="text-red-200 font-bold text-base leading-none">✕</span>}
               </div>
             )
