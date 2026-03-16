@@ -77,6 +77,7 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
   const [myEffects, setMyEffects] = useState<BoardEffect[]>([])
   const [oppEffects, setOppEffects] = useState<BoardEffect[]>([])
   const [myShake, setMyShake] = useState(false)
+  const [timeLeft, setTimeLeft] = useState(30)
   const toastCounterRef = useRef(0)
   const effectCounterRef = useRef(0)
   const startTimeRef = useRef(Date.now())
@@ -194,6 +195,27 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
     return () => { supabase.removeChannel(channel) }
   }, [session.gameId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Timer tury (reset po każdym strzale lub zmianie tury) ─────────────────
+
+  // Klucz zmienia się przy każdym strzale i przy zmianie tury
+  const timerKey = (currentTurn ?? '') + '-' + shots.length
+
+  useEffect(() => {
+    if (loading) return
+    setTimeLeft(30)
+    const interval = setInterval(() => {
+      setTimeLeft(prev => (prev > 0 ? prev - 1 : 0))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [timerKey, loading]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-pass gdy timer dobiegnie końca na mojej turze
+  useEffect(() => {
+    if (timeLeft === 0 && currentTurn === session.playerId && opponentId && !shooting) {
+      supabase.from('games').update({ current_turn: opponentId }).eq('id', session.gameId)
+    }
+  }, [timeLeft]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Pochodne stany plansz ─────────────────────────────────────────────────
 
   const myShots  = shots.filter(s => s.shooter_id === session.playerId)
@@ -300,16 +322,42 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
         ))}
       </div>
 
-      {/* Wskaźnik tury */}
+      {/* Wskaźnik tury + timer */}
       <div className="flex flex-col items-center gap-2">
         <h1 className="text-2xl font-bold text-white tracking-wide">Rozgrywka</h1>
-        <div className={[
-          'px-5 py-2 rounded-full text-sm font-semibold border transition-all duration-300',
-          isMyTurn
-            ? 'bg-emerald-900/60 text-emerald-300 border-emerald-600 shadow-lg shadow-emerald-900/40'
-            : 'bg-cyan-950 text-cyan-500 border-cyan-800',
-        ].join(' ')}>
-          {isMyTurn ? '🎯 Twoja tura — wybierz pole na planszy przeciwnika' : `⏳ Tura gracza ${opponentName}…`}
+        <div className="flex items-center gap-3">
+          <div className={[
+            'px-5 py-2 rounded-full text-sm font-semibold border transition-all duration-300',
+            isMyTurn
+              ? 'bg-emerald-900/60 text-emerald-300 border-emerald-600 shadow-lg shadow-emerald-900/40'
+              : 'bg-cyan-950 text-cyan-500 border-cyan-800',
+          ].join(' ')}>
+            {isMyTurn ? '🎯 Twoja tura — wybierz pole na planszy przeciwnika' : `⏳ Tura gracza ${opponentName}…`}
+          </div>
+          {/* Odliczanie */}
+          <div className="flex flex-col items-center gap-0.5">
+            <span className={[
+              'text-2xl font-mono font-bold w-10 text-center transition-colors duration-300',
+              timeLeft <= 5  ? 'text-red-400'
+              : timeLeft <= 10 ? 'text-orange-400'
+              : timeLeft <= 20 ? 'text-yellow-400'
+              : 'text-emerald-400',
+            ].join(' ')}>
+              {timeLeft}
+            </span>
+            <div className="w-10 h-1 bg-cyan-900 rounded-full overflow-hidden">
+              <div
+                className={[
+                  'h-full rounded-full transition-all duration-1000',
+                  timeLeft <= 5  ? 'bg-red-500'
+                  : timeLeft <= 10 ? 'bg-orange-500'
+                  : timeLeft <= 20 ? 'bg-yellow-500'
+                  : 'bg-emerald-500',
+                ].join(' ')}
+                style={{ width: `${(timeLeft / 30) * 100}%` }}
+              />
+            </div>
+          </div>
         </div>
       </div>
 
