@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import Board from './components/Board'
 import ShipPanel from './components/ShipPanel'
 import Lobby, { GameSession } from './components/Lobby'
-import GameScreen from './components/GameScreen'
+import GameScreen, { GameResult } from './components/GameScreen'
+import GameOver from './components/GameOver'
 import { supabase } from './lib/supabase'
 import { CellState, Orientation, ShipDef } from './types'
 
@@ -243,7 +244,7 @@ function PlacementScreen({ session, onGameStart }: { session: GameSession; onGam
 export default function App() {
   const [session, setSession] = useState<GameSession | null>(null)
   const [screen, setScreen] = useState<'lobby' | 'placement' | 'game' | 'gameover'>('lobby')
-  const [won, setWon] = useState<boolean | null>(null)
+  const [gameResult, setGameResult] = useState<GameResult | null>(null)
 
   if (screen === 'lobby') {
     return <Lobby onEnterGame={s => { setSession(s); setScreen('placement') }} />
@@ -257,23 +258,22 @@ export default function App() {
     return (
       <GameScreen
         session={session}
-        onGameOver={w => { setWon(w); setScreen('gameover') }}
+        onGameOver={result => { setGameResult(result); setScreen('gameover') }}
       />
     )
   }
 
   // Ekran końca gry
-  return (
-    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-6">
-      <p className={`text-5xl font-bold ${won ? 'text-emerald-400' : 'text-red-400'}`}>
-        {won ? 'Zwycięstwo!' : 'Przegrana'}
-      </p>
-      <button
-        onClick={() => { setSession(null); setScreen('lobby') }}
-        className="px-6 py-3 rounded-xl bg-cyan-700 hover:bg-cyan-600 text-white font-bold tracking-wider transition-all active:scale-95"
-      >
-        Zagraj ponownie
-      </button>
-    </div>
-  )
+  if (screen === 'gameover' && gameResult) {
+    return (
+      <GameOver
+        won={gameResult.won}
+        totalShots={gameResult.totalShots}
+        durationSeconds={gameResult.durationSeconds}
+        onNewGame={() => { setSession(null); setGameResult(null); setScreen('lobby') }}
+      />
+    )
+  }
+
+  return null
 }

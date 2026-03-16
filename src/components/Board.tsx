@@ -20,6 +20,7 @@ function getCellClass(state: CellState, isPreview: boolean, previewValid: boolea
   if (state === 'ship') return 'bg-teal-700 hover:bg-teal-600 border-teal-900'
   if (state === 'hit')  return 'bg-red-500 border-red-700'
   if (state === 'miss') return 'bg-cyan-100 border-cyan-300'
+  if (state === 'sunk') return 'bg-orange-800 border-orange-900'
   // puste pole — hover tylko gdy aktywne
   return disabled ? 'bg-cyan-700 border-cyan-900' : 'bg-cyan-700 hover:bg-cyan-500 border-cyan-900'
 }
@@ -65,6 +66,7 @@ export default function Board({ cells, previewIndices, previewValid, onCellClick
               >
                 {state === 'miss' && <span className="text-cyan-400 text-xl leading-none">·</span>}
                 {state === 'hit'  && <span className="text-red-200 font-bold text-base leading-none">✕</span>}
+                {state === 'sunk' && <span className="text-orange-300 font-bold text-base leading-none">✕</span>}
               </div>
             )
           })}

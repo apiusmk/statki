@@ -1,4 +1,4 @@
-export type CellState = 'empty' | 'ship' | 'hit' | 'miss'
+export type CellState = 'empty' | 'ship' | 'hit' | 'miss' | 'sunk'
 export type Orientation = 'h' | 'v'
 
 export interface ShipDef {

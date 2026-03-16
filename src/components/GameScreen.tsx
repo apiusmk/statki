@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { GameSession } from './Lobby'
 import Board from './Board'
 import { CellState } from '../types'
 
-// Łączna liczba pól statków: 5+4+3+3+2 = 17
 const TOTAL_SHIP_CELLS = 17
 
 interface Shot {
@@ -14,9 +13,53 @@ interface Shot {
   result: 'hit' | 'miss' | 'sunk'
 }
 
+// Znajdź wszystkie pola statku zaczynając od danej komórki (BFS, tylko poziomo/pionowo)
+function findShipCells(startIndex: number, boardCells: string[]): number[] {
+  const visited = new Set<number>()
+  const queue = [startIndex]
+  while (queue.length > 0) {
+    const idx = queue.pop()!
+    if (visited.has(idx) || boardCells[idx] !== 'ship') continue
+    visited.add(idx)
+    const row = Math.floor(idx / 10), col = idx % 10
+    if (row > 0) queue.push(idx - 10)
+    if (row < 9) queue.push(idx + 10)
+    if (col > 0) queue.push(idx - 1)
+    if (col < 9) queue.push(idx + 1)
+  }
+  return [...visited]
+}
+
+// Wyznacz zbiór pól zatopionych statków na podstawie historii strzałów
+function computeSunkCells(
+  shotsFromPlayer: Shot[],
+  boardCells: string[]
+): Set<number> {
+  const sunkSet = new Set<number>()
+  for (const shot of shotsFromPlayer) {
+    if (shot.result !== 'sunk') continue
+    for (const idx of findShipCells(shot.cell_index, boardCells)) {
+      sunkSet.add(idx)
+    }
+  }
+  return sunkSet
+}
+
+export interface GameResult {
+  won: boolean
+  totalShots: number
+  durationSeconds: number
+}
+
 interface GameScreenProps {
   session: GameSession
-  onGameOver: (won: boolean) => void
+  onGameOver: (result: GameResult) => void
+}
+
+interface Toast {
+  id: number
+  text: string
+  type: 'sunk-me' | 'sunk-opp'
 }
 
 export default function GameScreen({ session, onGameOver }: GameScreenProps) {
@@ -28,6 +71,21 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
   const [opponentName, setOpponentName] = useState<string>('Przeciwnik')
   const [loading, setLoading] = useState(true)
   const [shooting, setShooting] = useState(false)
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const toastCounterRef = useRef(0)
+  // Czas startu ekranu gry (przybliżony czas trwania rozgrywki)
+  const startTimeRef = useRef(Date.now())
+
+  const finishGame = useCallback((won: boolean, allShots: Shot[]) => {
+    const durationSeconds = Math.round((Date.now() - startTimeRef.current) / 1000)
+    onGameOver({ won, totalShots: allShots.length, durationSeconds })
+  }, [onGameOver])
+
+  function addToast(text: string, type: Toast['type']) {
+    const id = ++toastCounterRef.current
+    setToasts(prev => [...prev, { id, text, type }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000)
+  }
 
   // Wczytaj dane gry przy starcie
   useEffect(() => {
@@ -41,23 +99,21 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
       if (!game) { setLoading(false); return }
 
       setCurrentTurn(game.current_turn)
-
-      const oppId   = game.player1_id === session.playerId ? game.player2_id   : game.player1_id
-      const oppName = game.player1_id === session.playerId ? game.player2_name  : game.player1_name
+      const oppId   = game.player1_id === session.playerId ? game.player2_id  : game.player1_id
+      const oppName = game.player1_id === session.playerId ? game.player2_name : game.player1_name
       setOpponentId(oppId)
       setOpponentName(oppName ?? 'Przeciwnik')
 
       if (game.status === 'finished') {
-        onGameOver(game.winner_id === session.playerId)
+        // Pobierz strzały żeby przekazać statystyki
+        const { data: sd } = await supabase.from('shots').select('id, shooter_id, cell_index, result')
+          .eq('game_id', session.gameId)
+        finishGame(game.winner_id === session.playerId, (sd ?? []) as Shot[])
         return
       }
 
-      // Wczytaj plansze obu graczy
       const { data: boards } = await supabase
-        .from('boards')
-        .select('player_id, cells')
-        .eq('game_id', session.gameId)
-
+        .from('boards').select('player_id, cells').eq('game_id', session.gameId)
       if (boards) {
         const mine = boards.find(b => b.player_id === session.playerId)
         const opp  = boards.find(b => b.player_id === oppId)
@@ -65,13 +121,9 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
         if (opp)  setOpponentRawCells(opp.cells as string[])
       }
 
-      // Wczytaj historię strzałów
       const { data: shotsData } = await supabase
-        .from('shots')
-        .select('id, shooter_id, cell_index, result')
-        .eq('game_id', session.gameId)
-        .order('created_at')
-
+        .from('shots').select('id, shooter_id, cell_index, result')
+        .eq('game_id', session.gameId).order('created_at')
       if (shotsData) setShots(shotsData as Shot[])
 
       setLoading(false)
@@ -79,14 +131,21 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
     load()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Subskrybuj nowe strzały i zmiany tury/statusu gry
+  // Subskrybuj nowe strzały i zmiany tury/statusu
   useEffect(() => {
     const channel = supabase
       .channel('game-play-' + session.gameId)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'shots', filter: `game_id=eq.${session.gameId}` },
-        (payload) => setShots(prev => [...prev, payload.new as Shot])
+        (payload) => {
+          const shot = payload.new as Shot
+          setShots(prev => [...prev, shot])
+          // Toast dla strzałów PRZECIWNIKA (zatopienie mojego statku)
+          if (shot.shooter_id !== session.playerId && shot.result === 'sunk') {
+            addToast('💥 Twój statek zatopiony!', 'sunk-me')
+          }
+        }
       )
       .on(
         'postgres_changes',
@@ -94,37 +153,41 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
         (payload) => {
           setCurrentTurn(payload.new.current_turn)
           if (payload.new.status === 'finished') {
-            onGameOver(payload.new.winner_id === session.playerId)
+            setShots(prev => {
+              finishGame(payload.new.winner_id === session.playerId, prev)
+              return prev
+            })
           }
         }
       )
       .subscribe()
-
     return () => { supabase.removeChannel(channel) }
   }, [session.gameId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Pochodne stany plansz ─────────────────────────────────────────────────
 
-  // Moja plansza: moje statki + efekty strzałów przeciwnika
+  const myShots  = shots.filter(s => s.shooter_id === session.playerId)
+  const oppShots = shots.filter(s => s.shooter_id !== session.playerId)
+
+  const mySunkCells  = computeSunkCells(myShots,  opponentRawCells)
+  const oppSunkCells = computeSunkCells(oppShots, myCells as unknown as string[])
+
   const myDisplayCells: CellState[] = myCells.map((cell, i) => {
-    const incomingShot = shots.find(s => s.shooter_id !== session.playerId && s.cell_index === i)
-    if (!incomingShot) return cell
-    return incomingShot.result === 'miss' ? 'miss' : 'hit'
+    if (oppSunkCells.has(i)) return 'sunk'
+    const shot = oppShots.find(s => s.cell_index === i)
+    if (!shot) return cell
+    return shot.result === 'miss' ? 'miss' : 'hit'
   })
 
-  // Plansza przeciwnika: tylko gdzie strzelałem (statki ukryte)
   const oppDisplayCells: CellState[] = Array(100).fill('empty').map((_, i) => {
-    const myShot = shots.find(s => s.shooter_id === session.playerId && s.cell_index === i)
-    if (!myShot) return 'empty'
-    return myShot.result === 'miss' ? 'miss' : 'hit'
+    if (mySunkCells.has(i)) return 'sunk'
+    const shot = myShots.find(s => s.cell_index === i)
+    if (!shot) return 'empty'
+    return shot.result === 'miss' ? 'miss' : 'hit'
   })
 
-  const isMyTurn = currentTurn === session.playerId
-
-  // Komórki już ostrzelane przeze mnie
-  const alreadyShot = new Set(
-    shots.filter(s => s.shooter_id === session.playerId).map(s => s.cell_index)
-  )
+  const isMyTurn   = currentTurn === session.playerId
+  const alreadyShot = new Set(myShots.map(s => s.cell_index))
 
   // ── Strzelanie ─────────────────────────────────────────────────────────────
   async function handleShoot(index: number) {
@@ -132,13 +195,21 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
     setShooting(true)
 
     const isHit = opponentRawCells[index] === 'ship'
-    const result: Shot['result'] = isHit ? 'hit' : 'miss'
 
-    // Sprawdź warunek zwycięstwa
-    const myHits = shots.filter(
-      s => s.shooter_id === session.playerId && s.result !== 'miss'
-    ).length + (isHit ? 1 : 0)
-    const gameOver = myHits >= TOTAL_SHIP_CELLS
+    // Sprawdź czy statek jest zatopiony po tym strzale
+    let isSunk = false
+    if (isHit) {
+      const shipCells = findShipCells(index, opponentRawCells)
+      const hitsSoFar = new Set(myShots.filter(s => s.result !== 'miss').map(s => s.cell_index))
+      hitsSoFar.add(index)
+      isSunk = shipCells.every(c => hitsSoFar.has(c))
+    }
+
+    const result: Shot['result'] = isSunk ? 'sunk' : isHit ? 'hit' : 'miss'
+
+    // Liczba trafionych pól po tym strzale
+    const totalHits = myShots.filter(s => s.result !== 'miss').length + (isHit ? 1 : 0)
+    const gameOver  = totalHits >= TOTAL_SHIP_CELLS
 
     await supabase.from('shots').insert({
       game_id: session.gameId,
@@ -147,15 +218,19 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
       result,
     })
 
+    // Toast zatopienia dla strzelającego
+    if (isSunk && !gameOver) addToast('💣 Zatopiony!', 'sunk-opp')
+
     if (gameOver) {
-      await supabase.from('games').update({ status: 'finished', winner_id: session.playerId })
+      await supabase.from('games')
+        .update({ status: 'finished', winner_id: session.playerId })
         .eq('id', session.gameId)
+      // Własny ekran końcowy — Realtime odpali finishGame u obu przez setShots powyżej
     } else if (!isHit) {
-      // Pudło — tura przechodzi do przeciwnika
       await supabase.from('games').update({ current_turn: opponentId })
         .eq('id', session.gameId)
     }
-    // Trafienie bez końca gry — tura pozostaje u strzelającego (brak update)
+    // Trafienie/zatopienie bez końca gry — tura pozostaje
 
     setShooting(false)
   }
@@ -172,6 +247,23 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-6 px-4 py-8">
 
+      {/* Toasty zatopień */}
+      <div className="fixed top-4 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-50 pointer-events-none">
+        {toasts.map(t => (
+          <div
+            key={t.id}
+            className={[
+              'px-6 py-3 rounded-2xl font-bold text-sm shadow-xl animate-bounce',
+              t.type === 'sunk-opp'
+                ? 'bg-orange-700 text-orange-100 border border-orange-500'
+                : 'bg-red-900 text-red-200 border border-red-700',
+            ].join(' ')}
+          >
+            {t.text}
+          </div>
+        ))}
+      </div>
+
       {/* Wskaźnik tury */}
       <div className="flex flex-col items-center gap-2">
         <h1 className="text-2xl font-bold text-white tracking-wide">Rozgrywka</h1>
@@ -181,9 +273,7 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
             ? 'bg-emerald-900/60 text-emerald-300 border-emerald-600 shadow-lg shadow-emerald-900/40'
             : 'bg-cyan-950 text-cyan-500 border-cyan-800',
         ].join(' ')}>
-          {isMyTurn
-            ? '🎯 Twoja tura — wybierz pole na planszy przeciwnika'
-            : `⏳ Tura gracza ${opponentName}…`}
+          {isMyTurn ? '🎯 Twoja tura — wybierz pole na planszy przeciwnika' : `⏳ Tura gracza ${opponentName}…`}
         </div>
       </div>
 
@@ -193,28 +283,15 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
         {/* Moja plansza */}
         <div className="flex flex-col gap-2 items-center">
           <div className="flex items-center gap-2">
-            <span className="text-cyan-400 text-sm font-semibold tracking-wide">
-              Moja flota
-            </span>
+            <span className="text-cyan-400 text-sm font-semibold tracking-wide">Moja flota</span>
             <span className="text-xs text-cyan-700">({session.playerName})</span>
           </div>
-          <Board
-            cells={myDisplayCells}
-            previewIndices={null}
-            previewValid={false}
-            onCellClick={() => {}}
-            onCellHover={() => {}}
-            disabled
-          />
-          {/* Licznik trafionych pól na mojej planszy */}
-          <HitCounter
-            label="Trafień na moją flotę"
-            count={shots.filter(s => s.shooter_id !== session.playerId && s.result !== 'miss').length}
-            danger
-          />
+          <Board cells={myDisplayCells} previewIndices={null} previewValid={false}
+            onCellClick={() => {}} onCellHover={() => {}} disabled />
+          <HitCounter label="Trafień na moją flotę"
+            count={oppShots.filter(s => s.result !== 'miss').length} danger />
         </div>
 
-        {/* Separator */}
         <div className="hidden lg:flex items-center self-stretch">
           <div className="w-px bg-cyan-900 h-full" />
         </div>
@@ -225,38 +302,39 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
             <span className={`text-sm font-semibold tracking-wide ${isMyTurn ? 'text-emerald-400' : 'text-cyan-700'}`}>
               Flota {opponentName}
             </span>
-            {isMyTurn && (
-              <span className="text-xs text-emerald-600 animate-pulse">← klikaj!</span>
-            )}
+            {isMyTurn && <span className="text-xs text-emerald-600 animate-pulse">← klikaj!</span>}
           </div>
           <div className={[
             'rounded-2xl transition-all duration-300',
             isMyTurn ? 'ring-2 ring-emerald-500/40 shadow-lg shadow-emerald-900/30' : '',
             shooting ? 'opacity-60 pointer-events-none' : '',
           ].join(' ')}>
-            <Board
-              cells={oppDisplayCells}
-              previewIndices={null}
-              previewValid={false}
-              onCellClick={handleShoot}
-              onCellHover={() => {}}
-              disabled={!isMyTurn || shooting}
-            />
+            <Board cells={oppDisplayCells} previewIndices={null} previewValid={false}
+              onCellClick={handleShoot} onCellHover={() => {}}
+              disabled={!isMyTurn || shooting} />
           </div>
-          {/* Licznik moich trafień */}
-          <HitCounter
-            label="Moje trafienia"
-            count={shots.filter(s => s.shooter_id === session.playerId && s.result !== 'miss').length}
-            danger={false}
-          />
+          <HitCounter label="Moje trafienia"
+            count={myShots.filter(s => s.result !== 'miss').length} danger={false} />
         </div>
 
+      </div>
+
+      {/* Legenda */}
+      <div className="flex gap-4 text-xs text-cyan-700 mt-2">
+        <span className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-sm bg-red-500 inline-block" />trafienie
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-sm bg-orange-800 inline-block" />zatopiony
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-sm bg-cyan-100 inline-block" />pudło
+        </span>
       </div>
     </div>
   )
 }
 
-// Mały pasek postępu trafień
 function HitCounter({ label, count, danger }: { label: string; count: number; danger: boolean }) {
   const pct = Math.round((count / TOTAL_SHIP_CELLS) * 100)
   return (
