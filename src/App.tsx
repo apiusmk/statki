@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import Board from './components/Board'
 import ShipPanel from './components/ShipPanel'
-import { CellState, Orientation, ShipDef } from './types'
+import Lobby, { GameSession } from './components/Lobby'
 import { supabase } from './lib/supabase'
+import { CellState, Orientation, ShipDef } from './types'
 
 const SHIP_DEFS: ShipDef[] = [
   { id: 'carrier',    name: 'Lotniskowiec', size: 5, total: 1 },
@@ -51,7 +52,6 @@ function isValidPlacement(indices: number[], cells: CellState[]): boolean {
 // Jedna próba losowego rozstawienia wszystkich statków; zwraca null gdy się nie uda
 function tryRandomPlacement(): CellState[] | null {
   const cells: CellState[] = Array(100).fill('empty')
-  // Największe statki najpierw — lepsza szansa sukcesu
   const sizes = SHIP_DEFS.flatMap(d => Array(d.total).fill(d.size)).sort((a, b) => b - a)
 
   for (const size of sizes) {
@@ -71,68 +71,67 @@ function tryRandomPlacement(): CellState[] | null {
   return cells
 }
 
-// Ponawia próby aż do skutku
 function buildRandomPlacement(): CellState[] {
   for (let i = 0; i < 50; i++) {
     const result = tryRandomPlacement()
     if (result) return result
   }
-  return Array(100).fill('empty') // nie powinno się zdarzyć
+  return Array(100).fill('empty')
 }
 
-export default function App() {
+// ── Ekran rozstawiania statków ─────────────────────────────────────────────
+function PlacementScreen({ session, onGameStart }: { session: GameSession; onGameStart: () => void }) {
   const [cells, setCells] = useState<CellState[]>(() => Array(100).fill('empty'))
   const [placed, setPlaced] = useState<Record<string, number>>({})
   const [selectedId, setSelectedId] = useState<string | null>(SHIP_DEFS[0].id)
   const [orientation, setOrientation] = useState<Orientation>('h')
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
-  const [dbStatus, setDbStatus] = useState<string>('Łączenie z bazą…')
+  const [myBoardSaved, setMyBoardSaved] = useState(false)
+  const [savingBoard, setSavingBoard] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
-  // Test połączenia z Supabase
+  // Nasłuchuj na zmianę statusu gry → 'playing'
   useEffect(() => {
-    supabase
-      .from('games')
-      .select('*', { count: 'exact', head: true })
-      .then(({ count, error }) => {
-        if (error) setDbStatus(`Błąd: ${error.message}`)
-        else setDbStatus(`Supabase OK — rekordów w games: ${count ?? 0}`)
-      })
-  }, [])
+    const channel = supabase
+      .channel('placement-' + session.gameId)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${session.gameId}` },
+        (payload) => {
+          if (payload.new.status === 'playing') onGameStart()
+        }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [session.gameId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Klawisz R obraca statek
+  // Klawisz R obraca statek (tylko gdy plansza nie jest jeszcze zapisana)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.code === 'KeyR') {
-        setOrientation(o => o === 'h' ? 'v' : 'h')
-      }
+      if (e.code === 'KeyR' && !myBoardSaved) setOrientation(o => o === 'h' ? 'v' : 'h')
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [myBoardSaved])
 
   const selectedDef = SHIP_DEFS.find(d => d.id === selectedId) ?? null
 
-  // displayIndices: zawsze obliczone (obcięte do granicy) — dla czerwonego podglądu przy krawędzi
   const displayIndices: number[] =
-    selectedDef && hoveredIndex !== null
+    selectedDef && hoveredIndex !== null && !myBoardSaved
       ? getDisplayIndices(hoveredIndex, selectedDef.size, orientation)
       : []
 
-  // Podgląd jest poprawny tylko gdy żadne pole nie wychodzi poza planszę i brak kolizji
   const previewValid =
     displayIndices.length === (selectedDef?.size ?? 0) &&
     isValidPlacement(displayIndices, cells)
 
   function handleCellClick(index: number) {
-    if (!selectedDef || displayIndices.length === 0 || !previewValid) return
-
+    if (myBoardSaved || !selectedDef || displayIndices.length === 0 || !previewValid) return
     const newCells = [...cells]
     for (const idx of displayIndices) newCells[idx] = 'ship'
     setCells(newCells)
-
     const newPlaced = { ...placed, [selectedDef.id]: (placed[selectedDef.id] ?? 0) + 1 }
     setPlaced(newPlaced)
-
     if (newPlaced[selectedDef.id] >= selectedDef.total) {
       const next = SHIP_DEFS.find(d => (newPlaced[d.id] ?? 0) < d.total && d.id !== selectedDef.id)
       setSelectedId(next?.id ?? null)
@@ -140,27 +139,57 @@ export default function App() {
   }
 
   function handleRandomize() {
+    if (myBoardSaved) return
     const newCells = buildRandomPlacement()
     setCells(newCells)
-    // Ustaw placed na maksimum dla wszystkich typów
     const newPlaced: Record<string, number> = {}
     for (const d of SHIP_DEFS) newPlaced[d.id] = d.total
     setPlaced(newPlaced)
     setSelectedId(null)
   }
 
-  function handleReady() {
-    // TODO: przejście do fazy gry
-    alert('Zaczynamy grę!')
+  async function handleReady() {
+    setSavingBoard(true)
+    setSaveError(null)
+
+    // Zapisz planszę do Supabase
+    const { error: boardErr } = await supabase
+      .from('boards')
+      .upsert({ game_id: session.gameId, player_id: session.playerId, cells, ready: true })
+
+    if (boardErr) { setSaveError(boardErr.message); setSavingBoard(false); return }
+
+    setMyBoardSaved(true)
+    setSavingBoard(false)
+
+    // Sprawdź czy przeciwnik też jest gotowy
+    const { data: boards } = await supabase
+      .from('boards')
+      .select('player_id, ready')
+      .eq('game_id', session.gameId)
+      .eq('ready', true)
+
+    // Jeśli obaj gotowi — zaktualizuj status gry (Realtime wywoła onGameStart u obu)
+    if (boards && boards.length === 2) {
+      await supabase
+        .from('games')
+        .update({ status: 'playing', current_turn: session.playerId })
+        .eq('id', session.gameId)
+    }
   }
 
   const allPlaced = SHIP_DEFS.every(d => (placed[d.id] ?? 0) >= d.total)
 
   return (
-    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-8">
-      <h1 className="text-4xl font-bold text-white tracking-wide">Statki - Multiplayer</h1>
-
-      <p className="text-sm text-cyan-600 font-mono">{dbStatus}</p>
+    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-6">
+      <div className="text-center">
+        <h1 className="text-3xl font-bold text-white tracking-wide">Rozstaw flotę</h1>
+        <p className="text-cyan-600 text-sm mt-1">
+          Pokój: <span className="font-mono text-cyan-400 font-bold tracking-widest">{session.gameCode}</span>
+          {' · '}
+          <span className="text-cyan-300 font-semibold">{session.playerName}</span>
+        </p>
+      </div>
 
       <div className="flex gap-8 items-start">
         <Board
@@ -170,18 +199,62 @@ export default function App() {
           onCellClick={handleCellClick}
           onCellHover={setHoveredIndex}
         />
-        <ShipPanel
-          ships={SHIP_DEFS}
-          placed={placed}
-          selectedId={selectedId}
-          orientation={orientation}
-          allPlaced={allPlaced}
-          onSelect={setSelectedId}
-          onToggleOrientation={() => setOrientation(o => o === 'h' ? 'v' : 'h')}
-          onRandomize={handleRandomize}
-          onReady={handleReady}
-        />
+        <div className="flex flex-col gap-3">
+          <ShipPanel
+            ships={SHIP_DEFS}
+            placed={placed}
+            selectedId={selectedId}
+            orientation={orientation}
+            allPlaced={allPlaced && !myBoardSaved}
+            onSelect={id => { if (!myBoardSaved) setSelectedId(id) }}
+            onToggleOrientation={() => { if (!myBoardSaved) setOrientation(o => o === 'h' ? 'v' : 'h') }}
+            onRandomize={handleRandomize}
+            onReady={handleReady}
+          />
+
+          {/* Status po kliknięciu GOTOWY */}
+          {myBoardSaved && (
+            <div className="p-4 bg-cyan-950 rounded-2xl border border-cyan-800 text-center">
+              <p className="text-emerald-400 font-semibold text-sm">Flota gotowa!</p>
+              <p className="text-cyan-600 text-xs mt-1 animate-pulse">Oczekiwanie na przeciwnika…</p>
+              <div className="flex justify-center gap-1.5 mt-3">
+                {[0, 1, 2].map(i => (
+                  <div key={i} className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce"
+                    style={{ animationDelay: `${i * 0.15}s` }} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {saveError && (
+            <p className="text-red-400 text-xs text-center">{saveError}</p>
+          )}
+          {savingBoard && (
+            <p className="text-cyan-500 text-xs text-center animate-pulse">Zapisywanie…</p>
+          )}
+        </div>
       </div>
+    </div>
+  )
+}
+
+// ── Główny komponent ───────────────────────────────────────────────────────
+export default function App() {
+  const [session, setSession] = useState<GameSession | null>(null)
+  const [screen, setScreen] = useState<'lobby' | 'placement' | 'game'>('lobby')
+
+  if (screen === 'lobby') {
+    return <Lobby onEnterGame={s => { setSession(s); setScreen('placement') }} />
+  }
+
+  if (screen === 'placement' && session) {
+    return <PlacementScreen session={session} onGameStart={() => setScreen('game')} />
+  }
+
+  // TODO: ekran gry
+  return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+      <p className="text-emerald-400 text-2xl font-bold">Gra rozpoczęta! 🚀</p>
     </div>
   )
 }
