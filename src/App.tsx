@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Board from './components/Board'
 import ShipPanel from './components/ShipPanel'
 import { CellState, Orientation, ShipDef } from './types'
+import { supabase } from './lib/supabase'
 
 const SHIP_DEFS: ShipDef[] = [
   { id: 'carrier',    name: 'Lotniskowiec', size: 5, total: 1 },
@@ -85,11 +86,23 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(SHIP_DEFS[0].id)
   const [orientation, setOrientation] = useState<Orientation>('h')
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
+  const [dbStatus, setDbStatus] = useState<string>('Łączenie z bazą…')
+
+  // Test połączenia z Supabase
+  useEffect(() => {
+    supabase
+      .from('games')
+      .select('*', { count: 'exact', head: true })
+      .then(({ count, error }) => {
+        if (error) setDbStatus(`Błąd: ${error.message}`)
+        else setDbStatus(`Supabase OK — rekordów w games: ${count ?? 0}`)
+      })
+  }, [])
 
   // Klawisz R obraca statek
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'r' || e.key === 'R') {
+      if (e.code === 'KeyR') {
         setOrientation(o => o === 'h' ? 'v' : 'h')
       }
     }
@@ -146,6 +159,8 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-8">
       <h1 className="text-4xl font-bold text-white tracking-wide">Statki - Multiplayer</h1>
+
+      <p className="text-sm text-cyan-600 font-mono">{dbStatus}</p>
 
       <div className="flex gap-8 items-start">
         <Board
