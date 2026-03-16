@@ -81,6 +81,9 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
   const toastCounterRef = useRef(0)
   const effectCounterRef = useRef(0)
   const startTimeRef = useRef(Date.now())
+  // Refy trzymające zawsze świeże wartości — używane wewnątrz interwału timera
+  const currentTurnRef = useRef<string | null>(null)
+  const opponentIdRef  = useRef<string | null>(null)
 
   function addEffect(board: 'my' | 'opp', cellIndex: number, type: BoardEffect['type']) {
     const id = ++effectCounterRef.current
@@ -195,6 +198,10 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
     return () => { supabase.removeChannel(channel) }
   }, [session.gameId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Synchronizuj refy ze stanem (odczyt wewnątrz interwału zawsze świeży)
+  useEffect(() => { currentTurnRef.current = currentTurn }, [currentTurn])
+  useEffect(() => { opponentIdRef.current  = opponentId  }, [opponentId])
+
   // ── Timer tury (reset po każdym strzale lub zmianie tury) ─────────────────
 
   // Klucz zmienia się przy każdym strzale i przy zmianie tury
@@ -204,17 +211,23 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
     if (loading) return
     setTimeLeft(30)
     const interval = setInterval(() => {
-      setTimeLeft(prev => (prev > 0 ? prev - 1 : 0))
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          // Auto-pass — refy gwarantują świeże wartości
+          const turn = currentTurnRef.current
+          const opp  = opponentIdRef.current
+          if (turn === session.playerId && opp) {
+            supabase.from('games')
+              .update({ current_turn: opp })
+              .eq('id', session.gameId)
+          }
+          return 0
+        }
+        return prev - 1
+      })
     }, 1000)
     return () => clearInterval(interval)
   }, [timerKey, loading]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Auto-pass gdy timer dobiegnie końca na mojej turze
-  useEffect(() => {
-    if (timeLeft === 0 && currentTurn === session.playerId && opponentId && !shooting) {
-      supabase.from('games').update({ current_turn: opponentId }).eq('id', session.gameId)
-    }
-  }, [timeLeft]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Pochodne stany plansz ─────────────────────────────────────────────────
 
