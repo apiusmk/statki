@@ -1,1 +1,58 @@
 @import "tailwindcss";
+
+/* ── Efekty wizualne planszy ─────────────────────────────────────────────── */
+
+@keyframes fx-hit {
+  0%   { transform: scale(0.2) rotate(-15deg); opacity: 1; }
+  50%  { transform: scale(1.6) rotate(10deg);  opacity: 1; }
+  100% { transform: scale(2.2) rotate(-5deg);  opacity: 0; }
+}
+
+@keyframes fx-miss {
+  0%   { transform: scale(0.1); opacity: 0.9; }
+  60%  { transform: scale(1.8); opacity: 0.5; }
+  100% { transform: scale(2.6); opacity: 0;   }
+}
+
+@keyframes fx-sunk-core {
+  0%   { transform: scale(0.1) rotate(0deg);   opacity: 1; }
+  40%  { transform: scale(2.2) rotate(15deg);  opacity: 1; }
+  100% { transform: scale(3.5) rotate(-10deg); opacity: 0; }
+}
+
+@keyframes fx-sunk-ring {
+  0%   { transform: scale(0.2); opacity: 0.8; }
+  100% { transform: scale(4);   opacity: 0;   }
+}
+
+@keyframes fx-particle {
+  0%   { transform: translate(0, 0)                             scale(1);   opacity: 1; }
+  100% { transform: translate(var(--px), var(--py))             scale(0);   opacity: 0; }
+}
+
+@keyframes fx-shake {
+  0%, 100% { transform: translate(0, 0);      }
+  20%       { transform: translate(-3px, 2px); }
+  40%       { transform: translate(3px, -2px); }
+  60%       { transform: translate(-2px, 3px); }
+  80%       { transform: translate(2px, -1px); }
+}
+
+.fx-hit {
+  animation: fx-hit 0.55s ease-out forwards;
+}
+.fx-miss {
+  animation: fx-miss 0.5s ease-out forwards;
+}
+.fx-sunk-core {
+  animation: fx-sunk-core 0.75s ease-out forwards;
+}
+.fx-sunk-ring {
+  animation: fx-sunk-ring 0.7s ease-out forwards;
+}
+.fx-particle {
+  animation: fx-particle 0.65s ease-out forwards;
+}
+.fx-shake {
+  animation: fx-shake 0.35s ease-in-out;
+}

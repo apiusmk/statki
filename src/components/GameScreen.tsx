@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { playHit, playMiss, playSunk } from '../lib/sounds'
 import { GameSession } from './Lobby'
-import Board from './Board'
+import Board, { BoardEffect } from './Board'
 import { CellState } from '../types'
 
 const TOTAL_SHIP_CELLS = 17
@@ -73,9 +73,26 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
   const [loading, setLoading] = useState(true)
   const [shooting, setShooting] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [myEffects, setMyEffects] = useState<BoardEffect[]>([])
+  const [oppEffects, setOppEffects] = useState<BoardEffect[]>([])
+  const [myShake, setMyShake] = useState(false)
   const toastCounterRef = useRef(0)
-  // Czas startu ekranu gry (przybliżony czas trwania rozgrywki)
+  const effectCounterRef = useRef(0)
   const startTimeRef = useRef(Date.now())
+
+  function addEffect(board: 'my' | 'opp', cellIndex: number, type: BoardEffect['type']) {
+    const id = ++effectCounterRef.current
+    const effect: BoardEffect = { id, cellIndex, type }
+    const setter = board === 'my' ? setMyEffects : setOppEffects
+    setter(prev => [...prev, effect])
+    const duration = type === 'sunk' ? 900 : 600
+    setTimeout(() => setter(prev => prev.filter(e => e.id !== id)), duration)
+  }
+
+  function triggerShake() {
+    setMyShake(true)
+    setTimeout(() => setMyShake(false), 400)
+  }
 
   const finishGame = useCallback((won: boolean, allShots: Shot[]) => {
     const durationSeconds = Math.round((Date.now() - startTimeRef.current) / 1000)
@@ -144,11 +161,15 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
           setShots(prev => [...prev, shot])
           // Dźwięk i toast dla strzałów PRZECIWNIKA
           if (shot.shooter_id !== session.playerId) {
+            const type = shot.result === 'sunk' ? 'sunk' : shot.result === 'hit' ? 'hit' : 'miss'
+            addEffect('my', shot.cell_index, type)
             if (shot.result === 'sunk') {
               playSunk()
+              triggerShake()
               addToast('💥 Twój statek zatopiony!', 'sunk-me')
             } else if (shot.result === 'hit') {
               playHit()
+              triggerShake()
             } else {
               playMiss()
             }
@@ -226,7 +247,9 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
       result,
     })
 
-    // Dźwięk i toast dla strzelającego
+    // Efekt wizualny i dźwięk dla strzelającego
+    const effectType = isSunk ? 'sunk' : isHit ? 'hit' : 'miss'
+    addEffect('opp', index, effectType)
     if (isSunk) playSunk()
     else if (isHit) playHit()
     else playMiss()
@@ -299,7 +322,8 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
             <span className="text-xs text-cyan-700">({session.playerName})</span>
           </div>
           <Board cells={myDisplayCells} previewIndices={null} previewValid={false}
-            onCellClick={() => {}} onCellHover={() => {}} disabled />
+            onCellClick={() => {}} onCellHover={() => {}} disabled
+            effects={myEffects} shake={myShake} />
           <HitCounter label="Trafień na moją flotę"
             count={oppShots.filter(s => s.result !== 'miss').length} danger />
         </div>
@@ -323,7 +347,8 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
           ].join(' ')}>
             <Board cells={oppDisplayCells} previewIndices={null} previewValid={false}
               onCellClick={handleShoot} onCellHover={() => {}}
-              disabled={!isMyTurn || shooting} />
+              disabled={!isMyTurn || shooting}
+              effects={oppEffects} />
           </div>
           <HitCounter label="Moje trafienia"
             count={myShots.filter(s => s.result !== 'miss').length} danger={false} />
