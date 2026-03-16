@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { playHit, playMiss, playSunk } from '../lib/sounds'
 import { GameSession } from './Lobby'
 import Board, { BoardEffect } from './Board'
+import Chat from './Chat'
 import { CellState } from '../types'
 
 const TOTAL_SHIP_CELLS = 17
@@ -368,6 +369,13 @@ export default function GameScreen({ session, onGameOver }: GameScreenProps) {
           <span className="w-3 h-3 rounded-sm bg-cyan-100 inline-block" />pudło
         </span>
       </div>
+
+      {/* Czat */}
+      <Chat
+        gameId={session.gameId}
+        playerId={session.playerId}
+        playerName={session.playerName}
+      />
     </div>
   )
 }
